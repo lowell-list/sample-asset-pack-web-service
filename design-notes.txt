@@ -1,0 +1,232 @@
+definitions
+-----------------------------------
+
+• "ASD" == AIR Application Storage Directory
+• "asset pack file" == a compressed .zip file containing assets
+• "asset-pack-id" == a unique id for an asset pack file
+  - form is <type>-<name>, i.e. "world-sand-dusty-reef", "activity-music"
+  - acceptable <type> values are "general", world" and "activity"; could be extended
+• test platforms: iOS 8, Galaxy S5, Nabi DreamTab, Kindle Fire, Desktop
+
+risks / tests / requirements
+-----------------------------------
+• What is maximum size & availability of ASD on test platforms?
+  • TEST: dynamically load large (200MB) compressed asset pack from web server, decompress it to ASD with fzip, and inspect files
+    - PASS: desktop AIR, iPad 2, Galaxy S5
+  • TEST: dynamically load and run interaction animation SWFs from ASD
+    - PASS: desktop AIR, iPad 2, Galaxy S5
+  • TEST: dynamically load tiles from ASD
+    - PASS: desktop AIR, iPad 2, Galaxy S5
+  • TEST: dynamically load video from ASD
+    - FAIL: desktop AIR NetStream.play(): "In Flash Player and in AIR content outside the application security sandbox, you can play local video files that are stored in the same directory as the SWF file or in a subdirectory; however, you can't navigate to a higher-level directory" (like ASD)
+    - FAIL: iOS AIR copied video to ASD successfully, but for some reason it cannot be accessed (file appears not to exist)
+    - FAIL: did not attempt test on Android
+• Swim & Play must continue to work inside Flash Player (not AIR) on the web, so asset loading must be flexible to handle this case
+• break up Activities into code / assets - work with Cartrell - possible for Activity to access ASD?
+  • TEST: break off assets from Identity Activity and then load them from ASD - PASS
+• versioning system for dynamic assets - SEE BELOW
+• create markup to define interaction animation behavior - DONE
+• PHP zip library is available
+    Fraboom.com PHP Zip library, 5/15/15 11:30AM
+    -----------------------------------
+    Zip enabled
+    Extension Version $Id: 05dd1ecc211075107543b0ef8cee488dd229fccf $
+    Zip version 1.11.0
+    Libzip version  0.10.1
+
+asset-pack web service
+-----------------------------------
+input:
+  appId: "com.captainmcfinn.SwimAndPlay"                                      // application ID
+  appVersion: "7500"                                                          // application version; for Swim and Play, the build number
+  assetPackIds: ["world-sand-dusty-reef","activity-music"]                    // array of asset-pack-id values defined for this application
+  selectSubdirs: {"tiles":["dxt"],"spritesheets":["png","xml"]}               // (optional) for specified parent directories, selects subdirs to retain, causing all other sibling subdirs to be omitted from the asset pack
+                                                                              //   keys = parent dir names, values = array of subdir names to retain
+output:
+  statusCode: 0                                                               // 0 == success, non-zero integer == error
+  message: "ok"                                                               // (optional) status description text
+  assetPackInfo:                                                              // dictionary of objects keyed by asset-pack-id
+    "activity-music"
+      relativePath: "some/path/activity-music-sprdxt-12ff055.zip"             // asset pack download path, relative to web service root;
+                                                                              // note: filename includes:
+                                                                              //   1) image format decorators: "sprdxt", which indicates that spritesheet images are in DXT format
+                                                                              //   2) file checksum, unique for every version of this asset pack
+    "world-sand-dusty-reef"
+      relativePath: "some/path/world-sand-dusty-reef-tildxt-sprpng-efd781a.zip"
+
+• web service queries existing local directory structure to decide if requested asset pack(s) are available
+• web service dynamically generates asset pack archives if they do not exist yet
+• web service removes non-selected subdirectories as specified
+    - TODO: make sure .DS_Store or other OS-specific files are NOT included in the generated.zip files (!)
+• asset pack archives are created side by side with original directory, with the following example structure:
+├── asset-pack.php
+└── packs
+    └── com.captainmcfinn.SwimAndPlay
+        ├── 7500
+        │   ├── activity-blocks
+        │   ├── activity-drawing
+        │   ├── activity-drawing-junior
+        │   ├── activity-dress-up
+        │   ├── activity-identity
+        │   ├── activity-music
+        │   ├── core
+        │   ├── tap-and-talk
+        │   ├── world-sand-dusty-reef
+        │   ├── world-unsmashable
+        │   └── world-unsmashable-sprpng-tildxt-bae6d53e.zip            <-- zip file is created side-by-side with content directory
+        └── 8500
+            └── tap-and-talk
+• when searching for an asset pack, the asset pack web service will "fall back" as needed to earlier version directories until it finds
+  the requested asset pack, i.e. if a version 8500 app is looking for the "core" asset pack, the web service will look first in the 8500 directory, and
+  if it's not found will sequentially look in earlier version directories until the asset pack is found.  In this way, the asset pack that exists with
+  the highest acceptable version is passed on to the requester.
+
+server file permissions
+-----------------------------------
+recursively set pack file/directory permissions on fraboom server:
+  sudo chown -R :www-data packs
+  sudo chmod -R g+w packs
+
+asset-pack AS3 client
+-----------------------------------
+• defines mount point in ASD: "ASD/packs/"
+• asset packs are downloaded and extracted to the mount point, with a new subdir for each unique asset pack ID, i.e.
+└── packs
+    ├── activity-music
+    ├── world-sand-dusty-reef
+    └── world-unsmashable
+• asset pack checksum is stored in version.txt file in each asset pack directory
+  - the checksum is used to determine if local assets are out of sync with server assets
+• client queries web service for latest asset pack info and downloads updated assets if local copy does not exist or is out of sync
+
+BEFORE: 1.5.5 release IPA app size analysis
+-----------------------------------
+.
+├── [ 376]  Default-568h@2x.png
+├── [ 409]  Default-667w-375h@2x.png
+├── [ 38K]  Default-Landscape@2x.png
+├── [ 376]  FiksuConfiguration.plist
+├── [ 16K]  SwimAndPlayApp-app.xml
+├── [1.6M]  SwimAndPlayApp.swf
+└── [156M]  assets
+    ├── [ 74M]  activities
+    │   ├── [3.6M]  BlockBuilding
+    │   │   └── [3.6M]  BlockBuilding.swf
+    │   ├── [ 27M]  DrawingTool
+    │   │   ├── [4.3M]  DrawingTool.swf
+    │   │   ├── [ 12K]  data
+    │   │   │   └── [ 12K]  drawingToolSettings.xml
+    │   │   └── [ 23M]  media
+    │   │       ├── [ 16M]  backgrounds
+    │   │       ├── [5.2M]  characters
+    │   │       ├── [118K]  layoutIcons
+    │   │       └── [1.1M]  layouts
+    │   ├── [4.3M]  DrawingToolJr
+    │   │   ├── [4.3M]  DrawingToolJr.swf
+    │   │   └── [1.2K]  data
+    │   │       └── [1.1K]  drawingToolJrSettings.xml
+    │   ├── [4.1M]  DressUp
+    │   │   └── [4.1M]  DressUp.swf
+    │   ├── [ 15M]  Identity
+    │   │   ├── [9.8M]  Identity.swf
+    │   │   └── [5.2M]  data
+    │   │       ├── [2.0M]  audio
+    │   │       ├── [3.2M]  graphics
+    │   │       └── [5.6K]  identity.xml
+    │   └── [ 20M]  MusicGame
+    │       ├── [2.5M]  MAIpad.swf
+    │       └── [ 17M]  data
+    │           ├── [ 17M]  graphics_pvrtc
+    │           └── [206K]  xml
+    ├── [1.4M]  components
+    │   ├── [ 64K]  activityHUD.swf
+    │   ├── [ 38K]  chatDialog.swf
+    │   ├── [868K]  iconsDialog.swf
+    │   ├── [ 31K]  imageDialog.swf
+    │   ├── [ 31K]  loadingAnimationJelly-V2.swf
+    │   ├── [147K]  submarine.swf
+    │   ├── [ 26K]  videoHUD.swf
+    │   └── [191K]  worldHUD.swf
+    ├── [  68]  data
+    ├── [ 73K]  docs
+    │   ├── [ 11K]  FAQs.txt
+    │   ├── [4.6K]  forParents.txt
+    │   ├── [9.2K]  privacyPolicyMobile.txt
+    │   ├── [9.1K]  privacyPolicyWeb.txt
+    │   ├── [ 20K]  termsOfUseMobile.txt
+    │   └── [ 19K]  termsOfUseWeb.txt
+    ├── [211K]  fonts
+    │   ├── [164K]  TangoCom.ttf
+    │   └── [ 46K]  VAGRounded.ttf
+    ├── [ 58M]  images
+    │   ├── [943K]  backgrounds
+    │   ├── [991K]  icons
+    │   ├── [ 170]  launchScreens
+    │   │   └── [  68]  iOS
+    │   ├── [ 27M]  spritesheets
+    │   │   ├── [5.8M]  png-exclusive
+    │   │   ├── [ 21M]  pvrtc
+    │   │   └── [214K]  xml
+    │   └── [ 29M]  tiles
+    │       ├── [ 11M]  png
+    │       └── [ 18M]  pvrtc
+    ├── [ 13M]  interactions
+    ├── [1.4K]  particles
+    │   └── [1.3K]  subPropellerBubbles.pex
+    ├── [1.4M]  sounds
+    │   ├── [ 90K]  kidsCheeringAndClapping.mp3
+    │   └── [1.3M]  worldMusicV2.mp3
+    └── [7.8M]  videos
+        └── [7.8M]  subscriptionPromo.mp4
+
+158M used in 41 directories, 410 files
+
+total IPA size: 147,157,176 bytes (about 147.2 MB)
+
+goal: main app is <=50MB, all other data is in asset packs
+
+AFTER: 2.0.1 release IPA (ad hoc) analysis (6/2/15)
+-----------------------------------
+.
+├── [ 376]  Default-568h@2x.png
+├── [ 409]  Default-667w-375h@2x.png
+├── [ 38K]  Default-Landscape@2x.png
+├── [ 376]  FiksuConfiguration.plist
+├── [ 16K]  SwimAndPlayApp-app.xml
+├── [1.7M]  SwimAndPlayApp.swf
+└── [ 33M]  assets
+    ├── [4.4M]  activities
+    │   ├── [627K]  BlockBuilding.swf
+    │   ├── [818K]  DrawingTool.swf
+    │   ├── [752K]  DrawingToolJr.swf
+    │   ├── [695K]  DressUp.swf
+    │   ├── [774K]  Identity.swf
+    │   └── [828K]  MAIpad.swf
+    ├── [1.4M]  components
+    │   ├── [ 48K]  activityHUD.swf
+    │   ├── [ 38K]  chatDialog.swf
+    │   ├── [868K]  iconsDialog.swf
+    │   ├── [ 31K]  imageDialog.swf
+    │   ├── [ 31K]  loadingAnimationJelly-V2.swf
+    │   ├── [147K]  submarine.swf
+    │   ├── [ 26K]  videoHUD.swf
+    │   └── [238K]  worldHUD.swf
+    ├── [  68]  data
+    ├── [211K]  fonts
+    │   ├── [164K]  TangoCom.ttf
+    │   └── [ 46K]  VAGRounded.ttf
+    ├── [1.1M]  images
+    │   ├── [991K]  icons
+    │   ├── [ 170]  launchScreens
+    │   └── [110K]  spritesheets
+    ├── [ 203]  packs
+    │   └── [ 101]  NOTE.txt
+    └── [ 26M]  videos
+        ├── [ 13M]  welcomeFirstTimeUser.mp4
+        ├── [4.9M]  welcomeReturningUserNoTrialsLeft.mp4
+        └── [7.5M]  welcomeReturningUserTrialsLeft.mp4
+
+34M used in 14 directories, 53 files
+
+total IPA size: 48,387,401 bytes (about 48.4 MB)
+
